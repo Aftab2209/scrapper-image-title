@@ -8,15 +8,7 @@ router.post('/', async (req: Request, res: Response) => {
   let browser: any = null
 
   try {
-    const { url, secret } = req.body
-
-    // Optional secret protection
-    // if (secret !== process.env.SECRET_TOKEN) {
-    //   return res.status(401).json({
-    //     success: false,
-    //     error: 'Unauthorized',
-    //   })
-    // }
+    const { url } = req.body
 
     if (!url) {
       return res.status(400).json({
@@ -29,9 +21,6 @@ router.post('/', async (req: Request, res: Response) => {
     console.log('REQUEST URL:', url)
     console.log('==============================')
 
-    /*
-      Expand maps.app.goo.gl URLs
-    */
     const redirectResponse = await fetch(url, {
       method: 'GET',
       redirect: 'follow',
@@ -44,40 +33,6 @@ router.post('/', async (req: Request, res: Response) => {
     const expandedUrl = redirectResponse.url
 
     console.log('Expanded URL:', expandedUrl)
-
-    /*
-      Extract coordinates
-
-      Preferred:
-      !3dLAT!4dLNG
-
-      Fallback:
-      @LAT,LNG
-    */
-
-    const placeCoordinatesMatch = expandedUrl.match(
-      /!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/
-    )
-
-    const viewportCoordinatesMatch =
-      expandedUrl.match(
-        /@(-?\d+\.\d+),(-?\d+\.\d+)/
-      )
-
-    const latitude = placeCoordinatesMatch
-      ? Number(placeCoordinatesMatch[1])
-      : viewportCoordinatesMatch
-      ? Number(viewportCoordinatesMatch[1])
-      : null
-
-    const longitude = placeCoordinatesMatch
-      ? Number(placeCoordinatesMatch[2])
-      : viewportCoordinatesMatch
-      ? Number(viewportCoordinatesMatch[2])
-      : null
-
-    console.log('Latitude:', latitude)
-    console.log('Longitude:', longitude)
 
     const isLocal =
       process.env.NODE_ENV !== 'production'
@@ -104,18 +59,92 @@ router.post('/', async (req: Request, res: Response) => {
       timeout: 30000,
     })
 
-    console.log('Page loaded.')
-
-    /*
-      Give Maps time to render photos
-    */
     await page.waitForTimeout(5000)
+
+    const currentUrl = page.url()
+
+    console.log('Current URL:', currentUrl)
 
     const pageTitle = await page.title()
 
-    /*
-      Find actual place photos
-    */
+    const html = await page.content()
+
+    // ----------------------------
+    // COORDINATE EXTRACTION
+    // ----------------------------
+
+    let latitude: number | null = null
+    let longitude: number | null = null
+
+    // Method 1
+    let match = currentUrl.match(
+      /!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/
+    )
+
+    if (match) {
+      latitude = Number(match[1])
+      longitude = Number(match[2])
+
+      console.log(
+        'Coordinates found via URL !3d!4d'
+      )
+    }
+
+    // Method 2
+    if (!latitude || !longitude) {
+      match = currentUrl.match(
+        /@(-?\d+\.\d+),(-?\d+\.\d+)/
+      )
+
+      if (match) {
+        latitude = Number(match[1])
+        longitude = Number(match[2])
+
+        console.log(
+          'Coordinates found via URL @lat,lng'
+        )
+      }
+    }
+
+    // Method 3
+    if (!latitude || !longitude) {
+      match = html.match(
+        /!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/
+      )
+
+      if (match) {
+        latitude = Number(match[1])
+        longitude = Number(match[2])
+
+        console.log(
+          'Coordinates found via HTML !3d!4d'
+        )
+      }
+    }
+
+    // Method 4
+    if (!latitude || !longitude) {
+      match = html.match(
+        /@(-?\d+\.\d+),(-?\d+\.\d+)/
+      )
+
+      if (match) {
+        latitude = Number(match[1])
+        longitude = Number(match[2])
+
+        console.log(
+          'Coordinates found via HTML @lat,lng'
+        )
+      }
+    }
+
+    console.log('Latitude:', latitude)
+    console.log('Longitude:', longitude)
+
+    // ----------------------------
+    // IMAGE EXTRACTION
+    // ----------------------------
+
     const images = await page.evaluate(() => {
       return Array.from(document.images)
         .map((img) => ({
@@ -140,9 +169,6 @@ router.post('/', async (req: Request, res: Response) => {
 
     let image = images[0]?.src || ''
 
-    /*
-      Upgrade image quality
-    */
     if (image) {
       image = image.replace(
         /=w\d+-h\d+.*$/,
@@ -164,18 +190,12 @@ router.post('/', async (req: Request, res: Response) => {
 
     return res.json({
       success: true,
-
       title,
-
       image,
-
-      mapsUrl: page.url(),
-
+      mapsUrl: currentUrl,
       expandedUrl,
-
       latitude,
       longitude,
-
       imageCount: images.length,
     })
   } catch (error) {
