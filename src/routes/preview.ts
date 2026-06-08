@@ -10,9 +10,12 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     const { url, secret } = req.body
 
-    // Optional auth
+    // Optional secret protection
     // if (secret !== process.env.SECRET_TOKEN) {
-    //   return res.status(401).json({ error: 'Unauthorized' })
+    //   return res.status(401).json({
+    //     success: false,
+    //     error: 'Unauthorized',
+    //   })
     // }
 
     if (!url) {
@@ -22,11 +25,13 @@ router.post('/', async (req: Request, res: Response) => {
       })
     }
 
-    console.log('========================')
-    console.log('Incoming URL:', url)
-    console.log('========================')
+    console.log('==============================')
+    console.log('REQUEST URL:', url)
+    console.log('==============================')
 
-    // Expand maps.app.goo.gl links
+    /*
+      Expand maps.app.goo.gl URLs
+    */
     const redirectResponse = await fetch(url, {
       method: 'GET',
       redirect: 'follow',
@@ -40,18 +45,35 @@ router.post('/', async (req: Request, res: Response) => {
 
     console.log('Expanded URL:', expandedUrl)
 
-    // Extract coordinates
-    const coordinatesMatch =
+    /*
+      Extract coordinates
+
+      Preferred:
+      !3dLAT!4dLNG
+
+      Fallback:
+      @LAT,LNG
+    */
+
+    const placeCoordinatesMatch = expandedUrl.match(
+      /!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/
+    )
+
+    const viewportCoordinatesMatch =
       expandedUrl.match(
         /@(-?\d+\.\d+),(-?\d+\.\d+)/
       )
 
-    const latitude = coordinatesMatch
-      ? Number(coordinatesMatch[1])
+    const latitude = placeCoordinatesMatch
+      ? Number(placeCoordinatesMatch[1])
+      : viewportCoordinatesMatch
+      ? Number(viewportCoordinatesMatch[1])
       : null
 
-    const longitude = coordinatesMatch
-      ? Number(coordinatesMatch[2])
+    const longitude = placeCoordinatesMatch
+      ? Number(placeCoordinatesMatch[2])
+      : viewportCoordinatesMatch
+      ? Number(viewportCoordinatesMatch[2])
       : null
 
     console.log('Latitude:', latitude)
@@ -75,15 +97,25 @@ router.post('/', async (req: Request, res: Response) => {
       },
     })
 
+    console.log('Opening page...')
+
     await page.goto(expandedUrl, {
       waitUntil: 'domcontentloaded',
       timeout: 30000,
     })
 
+    console.log('Page loaded.')
+
+    /*
+      Give Maps time to render photos
+    */
     await page.waitForTimeout(5000)
 
     const pageTitle = await page.title()
 
+    /*
+      Find actual place photos
+    */
     const images = await page.evaluate(() => {
       return Array.from(document.images)
         .map((img) => ({
@@ -101,8 +133,16 @@ router.post('/', async (req: Request, res: Response) => {
         )
     })
 
+    console.log(
+      'Google Images Found:',
+      images.length
+    )
+
     let image = images[0]?.src || ''
 
+    /*
+      Upgrade image quality
+    */
     if (image) {
       image = image.replace(
         /=w\d+-h\d+.*$/,
@@ -115,29 +155,34 @@ router.post('/', async (req: Request, res: Response) => {
       ''
     )
 
-    console.log('========================')
-    console.log('Title:', title)
-    console.log('Image Found:', !!image)
-    console.log('Coordinates:', {
-      latitude,
-      longitude,
-    })
-    console.log('========================')
+    console.log('==============================')
+    console.log('TITLE:', title)
+    console.log('IMAGE FOUND:', !!image)
+    console.log('LAT:', latitude)
+    console.log('LNG:', longitude)
+    console.log('==============================')
 
     return res.json({
       success: true,
 
       title,
+
       image,
 
       mapsUrl: page.url(),
+
       expandedUrl,
 
       latitude,
       longitude,
+
+      imageCount: images.length,
     })
   } catch (error) {
-    console.error('Preview Error:', error)
+    console.error('==============================')
+    console.error('SCRAPER ERROR')
+    console.error(error)
+    console.error('==============================')
 
     return res.status(500).json({
       success: false,
