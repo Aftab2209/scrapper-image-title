@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express'
 import chromium from '@sparticuz/chromium'
 import { chromium as playwright } from 'playwright-core'
+import { extractCoordinates } from '../utils/extractCoordinates'
 
 const router = Router()
 
@@ -21,6 +22,7 @@ router.post('/', async (req: Request, res: Response) => {
     console.log('REQUEST URL:', url)
     console.log('==============================')
 
+    // Expand short Google Maps links
     const redirectResponse = await fetch(url, {
       method: 'GET',
       redirect: 'follow',
@@ -59,6 +61,7 @@ router.post('/', async (req: Request, res: Response) => {
       timeout: 30000,
     })
 
+    // Give Maps time to load photos + data
     await page.waitForTimeout(5000)
 
     const currentUrl = page.url()
@@ -69,81 +72,26 @@ router.post('/', async (req: Request, res: Response) => {
 
     const html = await page.content()
 
-    // ----------------------------
-    // COORDINATE EXTRACTION
-    // ----------------------------
+    // ------------------------------------
+    // COORDINATES
+    // ------------------------------------
 
-    let latitude: number | null = null
-    let longitude: number | null = null
-
-    // Method 1
-    let match = currentUrl.match(
-      /!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/
+    const {
+      latitude,
+      longitude,
+    } = await extractCoordinates(
+      currentUrl,
+      html,
+      pageTitle,
+      page
     )
-
-    if (match) {
-      latitude = Number(match[1])
-      longitude = Number(match[2])
-
-      console.log(
-        'Coordinates found via URL !3d!4d'
-      )
-    }
-
-    // Method 2
-    if (!latitude || !longitude) {
-      match = currentUrl.match(
-        /@(-?\d+\.\d+),(-?\d+\.\d+)/
-      )
-
-      if (match) {
-        latitude = Number(match[1])
-        longitude = Number(match[2])
-
-        console.log(
-          'Coordinates found via URL @lat,lng'
-        )
-      }
-    }
-
-    // Method 3
-    if (!latitude || !longitude) {
-      match = html.match(
-        /!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/
-      )
-
-      if (match) {
-        latitude = Number(match[1])
-        longitude = Number(match[2])
-
-        console.log(
-          'Coordinates found via HTML !3d!4d'
-        )
-      }
-    }
-
-    // Method 4
-    if (!latitude || !longitude) {
-      match = html.match(
-        /@(-?\d+\.\d+),(-?\d+\.\d+)/
-      )
-
-      if (match) {
-        latitude = Number(match[1])
-        longitude = Number(match[2])
-
-        console.log(
-          'Coordinates found via HTML @lat,lng'
-        )
-      }
-    }
 
     console.log('Latitude:', latitude)
     console.log('Longitude:', longitude)
 
-    // ----------------------------
-    // IMAGE EXTRACTION
-    // ----------------------------
+    // ------------------------------------
+    // IMAGES
+    // ------------------------------------
 
     const images = await page.evaluate(() => {
       return Array.from(document.images)
@@ -190,12 +138,16 @@ router.post('/', async (req: Request, res: Response) => {
 
     return res.json({
       success: true,
+
       title,
       image,
+
       mapsUrl: currentUrl,
       expandedUrl,
+
       latitude,
       longitude,
+
       imageCount: images.length,
     })
   } catch (error) {
